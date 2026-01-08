@@ -77,9 +77,3 @@ El desarrollo de Inferno Clubfit no termina aquí. Estas son las funciones plani
 [ ] Modo Competición: Rankings semanales entre amigos.
 
 [ ] Exportación de Datos: Posibilidad de descargar tu historial en CSV.
-
-📸 Capturas de Pantalla
-
-(Aquí puedes subir las imágenes de tu app a la carpeta del repositorio y enlazarlas así: ![Home](screenshots/home.png))
-
-Desarrollado con 🔥 y 🩸 por [Tu Nombre / Usuario de GitHub].
