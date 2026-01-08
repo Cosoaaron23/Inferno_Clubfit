@@ -1,0 +1,384 @@
+package com.cosoaaron.infernoclubfit
+
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.cosoaaron.infernoclubfit.ui.theme.InfernoClubfitTheme
+import com.cosoaaron.infernoclubfit.ui.theme.InfernoOrange
+import com.cosoaaron.infernoclubfit.ui.theme.InfernoRed
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+
+// --- SOLUCIÓN AL ERROR DE TOPBAR ---
+@OptIn(ExperimentalMaterial3Api::class)
+
+// --- MODELOS DE DATOS ---
+data class Routine(val id: String, var name: String, var description: String, var exerciseNames: List<String>)
+data class WorkoutSet(val id: Int, var weight: String = "", var reps: String = "", var isCompleted: Boolean = false)
+data class SocialPost(val id: Long, val user: String, val workoutName: String, val likes: Int, val timeAgo: String)
+data class ActiveExercise(val id: String, var name: String, val sets: MutableList<WorkoutSet>, var restTimeSeconds: Int = 60)
+
+data class WorkoutHistoryItem(
+    val id: Long = System.currentTimeMillis(),
+    val routineName: String,
+    val date: Long,
+    val dateString: String,
+    val duration: String,
+    val volume: Int,
+    val totalSets: Int,
+    val notes: String,
+    val completedExercises: List<ActiveExercise>
+)
+
+data class BodyMeasurement(val date: String, val weight: String, val height: String, val chest: String, val biceps: String, val quads: String)
+
+// --- REPOSITORIO DE EJERCICIOS ---
+object InternalExerciseRepo {
+    val groupedExercises = mapOf(
+        "PECHO" to listOf("Press de Banca (Barra)", "Press de Banca (Mancuernas)", "Press Inclinado (Barra)", "Press Inclinado (Mancuernas)", "Aperturas", "Fondos", "Cruce de Poleas", "Press Declinado"),
+        "ESPALDA" to listOf("Dominadas", "Jalón al Pecho", "Remo con Barra", "Remo en Polea", "Peso Muerto", "Pull-over", "Remo con Mancuerna", "Hiperextensiones"),
+        "PIERNA" to listOf("Sentadilla (Barra)", "Prensa 45º", "Zancadas", "Extensiones de Cuádriceps", "Peso Muerto Rumano", "Curl Femoral", "Elevación de Gemelos", "Sentadilla Búlgara", "Hip Thrust"),
+        "HOMBRO" to listOf("Press Militar (Barra)", "Press Militar (Mancuernas)", "Elevaciones Laterales", "Pájaros", "Press Arnold", "Face Pull", "Encogimientos"),
+        "BRAZOS" to listOf("Curl con Barra", "Curl Martillo", "Curl Predicador", "Extensiones de Tríceps (Polea)", "Fondos entre Bancos", "Press Francés", "Curl Concentrado"),
+        "ABS/CARDIO" to listOf("Plancha", "Crunches", "Elevación de Piernas", "Cinta de Correr", "Elíptica", "Bicicleta", "Burpees")
+    )
+    val allExercisesList = groupedExercises.values.flatten().sorted()
+
+    fun getMuscleForExercise(exerciseName: String): String {
+        groupedExercises.forEach { (muscle, list) ->
+            if (list.any { it.equals(exerciseName, ignoreCase = true) }) return muscle
+        }
+        return "OTROS"
+    }
+}
+
+// --- GESTORES GLOBALES ---
+object GlobalUserManager {
+    var name by mutableStateOf("Aaron")
+    var username by mutableStateOf("cosoaaron16")
+    var level by mutableStateOf("Nivel 5 - Círculo de la Ira")
+    var followers by mutableIntStateOf(1)
+    var following by mutableIntStateOf(1)
+    var measurements = mutableStateListOf(
+        BodyMeasurement("1 Ene 2026", "80.5", "180", "105", "40", "60")
+    )
+}
+
+object GlobalFeedManager {
+    val posts = mutableStateListOf<SocialPost>()
+    fun shareWorkout(workout: WorkoutHistoryItem) {
+        // CAMBIO: Ahora usamos 'username' en lugar de 'name' para ser consistentes
+        posts.add(0, SocialPost(System.currentTimeMillis(), GlobalUserManager.username, "${workout.routineName} (${workout.volume}kg)", 0, "Ahora"))
+    }
+}
+
+object GlobalHistoryManager {
+    val history = mutableStateListOf<WorkoutHistoryItem>()
+
+    fun hasWorkoutOnDay(day: Int): Boolean {
+        val calendar = Calendar.getInstance()
+        val currentMonth = calendar.get(Calendar.MONTH)
+        val currentYear = calendar.get(Calendar.YEAR)
+
+        return history.any { item ->
+            calendar.timeInMillis = item.date
+            calendar.get(Calendar.DAY_OF_MONTH) == day &&
+                    calendar.get(Calendar.MONTH) == currentMonth &&
+                    calendar.get(Calendar.YEAR) == currentYear
+        }
+    }
+
+    fun getExerciseStats(exerciseName: String): Triple<Int, Int, Int> {
+        var maxWeight = 0
+        var totalVolume = 0
+        var timesPerformed = 0
+
+        history.forEach { workout ->
+            workout.completedExercises.filter { it.name == exerciseName }.forEach { exercise ->
+                timesPerformed++
+                exercise.sets.forEach { set ->
+                    if (set.isCompleted) {
+                        val w = set.weight.toIntOrNull() ?: 0
+                        val r = set.reps.toIntOrNull() ?: 0
+                        if (w > maxWeight) maxWeight = w
+                        totalVolume += (w * r)
+                    }
+                }
+            }
+        }
+        return Triple(maxWeight, totalVolume, timesPerformed)
+    }
+
+    fun getMusclesWorkedInPeriod(days: Int): List<String> {
+        val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+        val muscles = mutableSetOf<String>()
+
+        history.filter { it.date >= cutoff }.forEach { workout ->
+            workout.completedExercises.forEach { ex ->
+                muscles.add(InternalExerciseRepo.getMuscleForExercise(ex.name))
+            }
+        }
+        return muscles.toList()
+    }
+}
+
+object GlobalRoutineManager {
+    val routines = mutableStateListOf(
+        Routine("1", "Pierna (Leg Day)", "Sentadilla, Prensa...", listOf("Sentadilla (Barra)", "Prensa 45º", "Extensiones de Cuádriceps", "Peso Muerto Rumano")),
+        Routine("2", "Espalda y Bíceps", "Jalón, Remo...", listOf("Jalón al Pecho", "Remo en Polea", "Dominadas", "Curl con Barra")),
+        Routine("3", "Pecho Completo", "Press Banca...", listOf("Press de Banca (Barra)", "Press Inclinado (Mancuernas)", "Aperturas", "Fondos"))
+    )
+    var routineToEdit: Routine? = null
+    fun addRoutine(name: String, ex: List<String>) { routines.add(Routine(System.currentTimeMillis().toString(), name, ex.take(3).joinToString(", "), ex)) }
+    fun updateRoutine(id: String, name: String, ex: List<String>) { val i = routines.indexOfFirst { it.id == id }; if (i != -1) routines[i] = routines[i].copy(name = name, exerciseNames = ex, description = ex.take(3).joinToString(", ")) }
+    fun deleteRoutine(r: Routine) { routines.remove(r) }
+}
+
+object GlobalWorkoutManager {
+    var isActive by mutableStateOf(false); var isPaused by mutableStateOf(false); var currentRoutineName by mutableStateOf("")
+    val exercises = mutableStateListOf<ActiveExercise>(); var durationSeconds by mutableLongStateOf(0L)
+
+    fun startWorkout(name: String, ex: List<ActiveExercise>) { if (isActive && currentRoutineName == name) return; currentRoutineName = name; exercises.clear(); exercises.addAll(ex); isActive = true; isPaused = false; durationSeconds = 0 }
+    fun stopWorkout() { isActive = false; isPaused = false; exercises.clear(); durationSeconds = 0 }
+    fun pauseWorkout() { isPaused = true }; fun resumeWorkout() { isPaused = false }
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            InfernoClubfitTheme {
+                LaunchedEffect(GlobalWorkoutManager.isActive, GlobalWorkoutManager.isPaused) {
+                    while (GlobalWorkoutManager.isActive && !GlobalWorkoutManager.isPaused) { delay(1000L); GlobalWorkoutManager.durationSeconds++ }
+                }
+                MainAppStructure()
+            }
+        }
+    }
+}
+
+// --- NAVEGACIÓN ---
+@Composable
+fun MainAppStructure() {
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val isInActiveSession = currentRoute?.startsWith("active_session") == true
+
+    Scaffold(
+        bottomBar = {
+            Column {
+                if (GlobalWorkoutManager.isActive && !isInActiveSession) {
+                    WorkoutMiniPlayer(GlobalWorkoutManager.currentRoutineName, GlobalWorkoutManager.durationSeconds, { GlobalWorkoutManager.resumeWorkout(); navController.navigate("active_session/${GlobalWorkoutManager.currentRoutineName}") { launchSingleTop = true } }, { GlobalWorkoutManager.stopWorkout() })
+                }
+                val showBottom = currentRoute != "workout_summary" &&
+                        !isInActiveSession &&
+                        currentRoute != "create_routine" &&
+                        currentRoute != "settings"
+                if (showBottom) BottomNavigationBar(navController)
+            }
+        },
+        containerColor = Color.Black
+    ) { paddingValues ->
+        NavHost(navController = navController, startDestination = "home", modifier = Modifier.padding(paddingValues)) {
+            composable("home") { HomeScreen() }
+            composable("workout_hub") { WorkoutHubScreen(navController) }
+            composable("create_routine") { CreateRoutineScreen(navController) }
+            composable("active_session/{routineName}") { ActiveSessionScreen(navController, it.arguments?.getString("routineName") ?: "Entreno") }
+            composable("workout_summary") { SummaryScreen(navController) }
+            composable("profile") { ProfileScreen(navController) }
+            composable("settings") { SettingsScreen(navController) }
+            composable("profile_stats") { ProfileStatsScreen(navController) }
+            composable("profile_exercises") { ProfileExercisesScreen(navController) }
+            composable("profile_measures") { ProfileMeasuresScreen(navController) }
+            composable("profile_calendar") { ProfileCalendarScreen(navController) }
+        }
+    }
+}
+
+// ==========================================
+// PANTALLA: CONFIGURACIÓN
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(navController: NavController) {
+    var tempName by remember { mutableStateOf(GlobalUserManager.name) }
+    var tempUsername by remember { mutableStateOf(GlobalUserManager.username) }
+    var tempLevel by remember { mutableStateOf(GlobalUserManager.level) }
+    var notificationsEnabled by remember { mutableStateOf(true) }
+    var soundEnabled by remember { mutableStateOf(true) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Configuración", color = Color.White, fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) } },
+                actions = { TextButton(onClick = { GlobalUserManager.name = tempName; GlobalUserManager.username = tempUsername; GlobalUserManager.level = tempLevel; navController.popBackStack() }) { Text("Guardar", color = InfernoOrange, fontWeight = FontWeight.Bold) } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
+            )
+        },
+        containerColor = Color.Black
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
+            Text("PERFIL", color = InfernoOrange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(value = tempName, onValueChange = { tempName = it }, label = { Text("Nombre Real") }, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.Gray, unfocusedBorderColor = Color.DarkGray))
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(value = tempUsername, onValueChange = { tempUsername = it }, label = { Text("Usuario (@)") }, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.Gray, unfocusedBorderColor = Color.DarkGray))
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(value = tempLevel, onValueChange = { tempLevel = it }, label = { Text("Título de Guerrero") }, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.Gray, unfocusedBorderColor = Color.DarkGray))
+            Spacer(modifier = Modifier.height(32.dp))
+            Text("PREFERENCIAS", color = InfernoOrange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("Notificaciones", color = Color.White); Switch(checked = notificationsEnabled, onCheckedChange = { notificationsEnabled = it }, colors = SwitchDefaults.colors(checkedThumbColor = InfernoOrange, checkedTrackColor = Color.DarkGray)) }
+            Divider(color = Color(0xFF222222))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("Sonido del Timer", color = Color.White); Switch(checked = soundEnabled, onCheckedChange = { soundEnabled = it }, colors = SwitchDefaults.colors(checkedThumbColor = InfernoOrange, checkedTrackColor = Color.DarkGray)) }
+            Spacer(modifier = Modifier.height(48.dp))
+            Button(onClick = { }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E1E)), border = BorderStroke(1.dp, InfernoRed)) { Text("Cerrar Sesión", color = InfernoRed) }
+        }
+    }
+}
+
+// ==========================================
+// PANTALLA: PERFIL (LIMPIA Y SIN NOMBRE REPETIDO)
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileScreen(navController: NavController) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp).verticalScroll(rememberScrollState())) {
+
+        // CABECERA: SOLO USUARIO + SETTINGS
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(GlobalUserManager.username, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            IconButton(onClick = { navController.navigate("settings") }) { Icon(Icons.Default.Settings, "Configuración", tint = Color.White) }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(80.dp).clip(CircleShape).background(Color.Gray), contentAlignment = Alignment.Center) { Text("🐱", fontSize = 40.sp) }
+            Spacer(modifier = Modifier.width(20.dp))
+            // ESTADÍSTICAS: SIN NOMBRE, SOLO NÚMEROS
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                // CAMBIO: Se ha quitado el nombre, se pasa ""
+                ProfileStat("", "Entrenos", "${GlobalHistoryManager.history.size}")
+                ProfileStat("", "Seguidores", "${GlobalUserManager.followers}")
+                ProfileStat("", "Siguiendo", "${GlobalUserManager.following}")
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        // Nivel debajo del avatar
+        Text(GlobalUserManager.level, color = InfernoOrange, fontSize = 14.sp)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // GRÁFICA DE VOLUMEN (Datos Reales)
+        Text("Volumen últimos entrenos", color = Color.White, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(100.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween) {
+            val recentWorkouts = GlobalHistoryManager.history.take(7).reversed()
+            val maxVol = if(recentWorkouts.isNotEmpty()) recentWorkouts.maxOf { it.volume }.toFloat() else 1f
+            if (recentWorkouts.isEmpty()) { Text("Sin datos recientes", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterVertically)) }
+            else { recentWorkouts.forEach { w -> val heightRatio = (w.volume / maxVol).coerceAtLeast(0.1f); Column(horizontalAlignment = Alignment.CenterHorizontally) { Box(modifier = Modifier.width(20.dp).fillMaxHeight(heightRatio).background(InfernoOrange, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))) } } }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // GRID NAVEGACIÓN
+        Text("Información", color = Color.Gray)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProfileMenuButton("Estadísticas", Icons.Default.ShowChart, Modifier.weight(1f)) { navController.navigate("profile_stats") }
+            ProfileMenuButton("Ejercicios", Icons.Default.FitnessCenter, Modifier.weight(1f)) { navController.navigate("profile_exercises") }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProfileMenuButton("Medidas", Icons.Default.Accessibility, Modifier.weight(1f)) { navController.navigate("profile_measures") }
+            ProfileMenuButton("Calendario", Icons.Default.CalendarMonth, Modifier.weight(1f)) { navController.navigate("profile_calendar") }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Historial Reciente", color = Color.Gray)
+        Spacer(modifier = Modifier.height(8.dp))
+        if(GlobalHistoryManager.history.isNotEmpty()) {
+            GlobalHistoryManager.history.take(3).forEach { item ->
+                Card(modifier = Modifier.padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
+                    Row(modifier = Modifier.padding(16.dp)) {
+                        Column {
+                            Text(item.routineName, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("${item.dateString} • ${item.volume}kg", color = Color.Gray, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProfileStatsScreen(navController: NavController) { var period by remember { mutableStateOf("Semana") }; val workedMuscles = remember(period) { val days = when(period) { "Semana" -> 7; "Mes" -> 30; else -> 365 }; GlobalHistoryManager.getMusclesWorkedInPeriod(days) }; Scaffold(topBar = { TopAppBar(title = { Text("Estadísticas", color = Color.White) }, navigationIcon = { IconButton(onClick = {navController.popBackStack()}){Icon(Icons.Default.ArrowBack,null,tint=Color.White)} }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, containerColor = Color.Black) { padding -> Column(modifier = Modifier.padding(padding).padding(16.dp).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) { Row(modifier = Modifier.background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp)).padding(4.dp)) { listOf("Semana", "Mes", "Año").forEach { p -> val selected = period == p; Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if(selected) Color(0xFF333333) else Color.Transparent).clickable { period = p }.padding(horizontal = 16.dp, vertical = 8.dp)) { Text(p, color = if(selected) Color.White else Color.Gray) } } }; Spacer(modifier = Modifier.height(32.dp)); Text("Músculos trabajados ($period)", color = Color.White, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.height(16.dp)); Box(modifier = Modifier.size(300.dp, 400.dp)) { Canvas(modifier = Modifier.fillMaxSize()) { val path = Path().apply { addOval(androidx.compose.ui.geometry.Rect(center = Offset(size.width/2, 40f), radius = 30f)); moveTo(size.width/2 - 40, 70f); lineTo(size.width/2 + 40, 70f); lineTo(size.width/2 + 30, 200f); lineTo(size.width/2 - 30, 200f); close(); moveTo(size.width/2 - 40, 80f); lineTo(size.width/2 - 90, 150f); lineTo(size.width/2 - 70, 160f); moveTo(size.width/2 + 40, 80f); lineTo(size.width/2 + 90, 150f); lineTo(size.width/2 + 70, 160f); moveTo(size.width/2 - 30, 200f); lineTo(size.width/2 - 40, 350f); lineTo(size.width/2 - 10, 350f); lineTo(size.width/2 - 5, 200f); moveTo(size.width/2 + 30, 200f); lineTo(size.width/2 + 40, 350f); lineTo(size.width/2 + 10, 350f); lineTo(size.width/2 + 5, 200f) }; drawPath(path, color = Color.DarkGray, style = Stroke(width = 3f)); val highlight = InfernoOrange.copy(alpha = 0.7f); if (workedMuscles.contains("PECHO") || workedMuscles.contains("ABS/CARDIO")) drawCircle(highlight, radius = 25f, center = Offset(size.width/2, 110f)); if (workedMuscles.contains("HOMBRO")) { drawCircle(highlight, radius = 15f, center = Offset(size.width/2 - 45, 80f)); drawCircle(highlight, radius = 15f, center = Offset(size.width/2 + 45, 80f)) }; if (workedMuscles.contains("BRAZOS")) { drawCircle(highlight, radius = 12f, center = Offset(size.width/2 - 70, 120f)); drawCircle(highlight, radius = 12f, center = Offset(size.width/2 + 70, 120f)) }; if (workedMuscles.contains("PIERNA")) { drawCircle(highlight, radius = 25f, center = Offset(size.width/2 - 25, 260f)); drawCircle(highlight, radius = 25f, center = Offset(size.width/2 + 25, 260f)) } } }; if(workedMuscles.isEmpty()) Text("No hay datos en este periodo", color = Color.Gray) } } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProfileCalendarScreen(navController: NavController) { val calendar = Calendar.getInstance(); val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH); val monthName = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(calendar.time); Scaffold(topBar = { TopAppBar(title = { Text("Calendario", color = Color.White) }, navigationIcon = { IconButton(onClick = {navController.popBackStack()}){Icon(Icons.Default.ArrowBack,null,tint=Color.White)} }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, containerColor = Color.Black) { padding -> Column(modifier = Modifier.padding(padding).padding(16.dp)) { Text(monthName.capitalize(Locale.ROOT), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.height(24.dp)); LazyVerticalGrid(columns = GridCells.Fixed(7)) { items(listOf("L","M","M","J","V","S","D")) { day -> Text(day, color = Color.Gray, textAlign = TextAlign.Center) }; items((1..daysInMonth).toList()) { day -> val hasWorkout = GlobalHistoryManager.hasWorkoutOnDay(day); Box(modifier = Modifier.padding(4.dp).aspectRatio(1f), contentAlignment = Alignment.Center) { if (hasWorkout) Box(modifier = Modifier.fillMaxSize().clip(CircleShape).background(InfernoRed)); Text("$day", color = if(hasWorkout) Color.White else Color.LightGray) } } } } } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProfileExercisesScreen(navController: NavController) { var searchQuery by remember { mutableStateOf("") }; var selectedExercise by remember { mutableStateOf<String?>(null) }; Scaffold(topBar = { TopAppBar(title = { Text("Ejercicios", color = Color.White) }, navigationIcon = { IconButton(onClick = {navController.popBackStack()}){Icon(Icons.Default.ArrowBack,null,tint=Color.White)} }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, containerColor = Color.Black) { padding -> Column(modifier = Modifier.padding(padding).padding(16.dp)) { OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, placeholder = { Text("Buscar ejercicio...", color = Color.Gray) }, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = InfernoOrange), leadingIcon = { Icon(Icons.Default.Search, null, tint = Color.Gray) }); Spacer(modifier = Modifier.height(16.dp)); LazyColumn { val filtered = InternalExerciseRepo.allExercisesList.filter { it.contains(searchQuery, ignoreCase = true) }; items(filtered) { exercise -> Row(modifier = Modifier.fillMaxWidth().clickable { selectedExercise = exercise }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Box(modifier = Modifier.size(50.dp).clip(CircleShape).background(Color(0xFF1E1E1E)), contentAlignment = Alignment.Center) { Icon(Icons.Default.FitnessCenter, null, tint = InfernoOrange) }; Spacer(modifier = Modifier.width(16.dp)); Text(exercise, color = Color.White, fontSize = 16.sp); Spacer(modifier = Modifier.weight(1f)); Icon(Icons.Default.ChevronRight, null, tint = Color.Gray) }; Divider(color = Color(0xFF222222)) } } }; if (selectedExercise != null) { val stats = GlobalHistoryManager.getExerciseStats(selectedExercise!!); AlertDialog(onDismissRequest = { selectedExercise = null }, containerColor = Color(0xFF1E1E1E), title = { Text(selectedExercise!!, color = Color.White, fontWeight = FontWeight.Bold) }, text = { Column { if (stats.third == 0) Text("No has realizado este ejercicio aún.", color = Color.Gray) else { StatRow("Récord Peso (1RM)", "${stats.first} kg"); StatRow("Volumen Total Histórico", "${stats.second} kg"); StatRow("Veces Realizado", "${stats.third}") } } }, confirmButton = { Button(onClick = { selectedExercise = null }, colors = ButtonDefaults.buttonColors(containerColor = InfernoRed)) { Text("Cerrar") } }) } } }
+@Composable fun StatRow(label: String, value: String) { Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(label, color = Color.Gray); Text(value, color = InfernoOrange, fontWeight = FontWeight.Bold) } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProfileMeasuresScreen(navController: NavController) { var showAddDialog by remember { mutableStateOf(false) }; Scaffold(topBar = { TopAppBar(title = { Text("Medidas", color = Color.White) }, navigationIcon = { IconButton(onClick = {navController.popBackStack()}){Icon(Icons.Default.ArrowBack,null,tint=Color.White)} }, actions = { IconButton(onClick = { showAddDialog = true }){Icon(Icons.Default.Add,null,tint=InfernoOrange)} }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, containerColor = Color.Black) { padding -> LazyColumn(modifier = Modifier.padding(padding).padding(16.dp)) { items(GlobalUserManager.measurements) { m -> Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) { Column(modifier = Modifier.padding(16.dp)) { Text(m.date, color = InfernoOrange, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.height(8.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { MeasureItem("Peso", "${m.weight}kg"); MeasureItem("Altura", "${m.height}cm"); MeasureItem("Pecho", "${m.chest}cm") }; Spacer(modifier = Modifier.height(8.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { MeasureItem("Bíceps", "${m.biceps}cm"); MeasureItem("Cuádriceps", "${m.quads}cm"); Spacer(Modifier.weight(1f)) } } } } }; if (showAddDialog) { var w by remember { mutableStateOf("") }; var h by remember { mutableStateOf("") }; var c by remember { mutableStateOf("") }; var b by remember { mutableStateOf("") }; var q by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = { showAddDialog = false }, containerColor = Color(0xFF1E1E1E), title = { Text("Añadir Registro", color = Color.White) }, text = { Column { OutlinedTextField(value = w, onValueChange = { w = it }, label = { Text("Peso") }, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, focusedBorderColor = InfernoOrange)); OutlinedTextField(value = h, onValueChange = { h = it }, label = { Text("Altura") }, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, focusedBorderColor = InfernoOrange)); OutlinedTextField(value = c, onValueChange = { c = it }, label = { Text("Pecho") }, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, focusedBorderColor = InfernoOrange)); OutlinedTextField(value = b, onValueChange = { b = it }, label = { Text("Bíceps") }, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, focusedBorderColor = InfernoOrange)); OutlinedTextField(value = q, onValueChange = { q = it }, label = { Text("Cuádriceps") }, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, focusedBorderColor = InfernoOrange)) } }, confirmButton = { Button(onClick = { val date = SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date()); GlobalUserManager.measurements.add(0, BodyMeasurement(date, w, h, c, b, q)); showAddDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = InfernoRed)) { Text("Guardar") } }) } } }
+@Composable fun MeasureItem(label: String, value: String) { Column { Text(label, color = Color.Gray, fontSize = 12.sp); Text(value, color = Color.White, fontWeight = FontWeight.Bold) } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun ActiveSessionScreen(navController: NavController, routineTitle: String) { BackHandler { GlobalWorkoutManager.pauseWorkout(); navController.popBackStack() }; var showExerciseSelector by remember { mutableStateOf(false) }; var indexToReplace by remember { mutableStateOf(-1) }; var restTimerSeconds by remember { mutableIntStateOf(0) }; var isRestTimerRunning by remember { mutableStateOf(false) }; LaunchedEffect(isRestTimerRunning, restTimerSeconds) { if (isRestTimerRunning && restTimerSeconds > 0) { delay(1000L); restTimerSeconds-- } else if (restTimerSeconds == 0) { isRestTimerRunning = false } }; LaunchedEffect(routineTitle) { if (!GlobalWorkoutManager.isActive || GlobalWorkoutManager.currentRoutineName != routineTitle) { val foundRoutine = GlobalRoutineManager.routines.find { it.name == routineTitle }; val exercisesToLoad = mutableListOf<ActiveExercise>(); if (foundRoutine != null) { foundRoutine.exerciseNames.forEachIndexed { idx, name -> exercisesToLoad.add(ActiveExercise((idx+1).toString(), name, mutableStateListOf(WorkoutSet(1, "-", "-")))) } }; GlobalWorkoutManager.startWorkout(routineTitle, exercisesToLoad) } else { GlobalWorkoutManager.resumeWorkout() } }; Scaffold(topBar = { TopAppBar(title = { Column { Text(routineTitle, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold); val mins = GlobalWorkoutManager.durationSeconds / 60; val secs = GlobalWorkoutManager.durationSeconds % 60; Text("${mins}m ${secs}s", color = InfernoOrange, fontSize = 12.sp) } }, actions = { Button(onClick = { navController.navigate("workout_summary") }, colors = ButtonDefaults.buttonColors(containerColor = InfernoRed)) { Text("Terminar", color = Color.White, fontWeight = FontWeight.Bold) } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, floatingActionButton = { ExtendedFloatingActionButton(onClick = { indexToReplace = -1; showExerciseSelector = true }, containerColor = InfernoRed, contentColor = Color.White) { Icon(Icons.Default.Add, null); Text("AÑADIR EJERCICIO") } }, bottomBar = { AnimatedVisibility(visible = isRestTimerRunning || restTimerSeconds > 0, enter = slideInVertically { it }, exit = slideOutVertically { it }) { Card(colors = CardDefaults.cardColors(containerColor = InfernoOrange), shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp), modifier = Modifier.fillMaxWidth().height(60.dp)) { Row(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("DESCANSO", color = Color.White, fontWeight = FontWeight.Bold); Text("${restTimerSeconds / 60}:${(restTimerSeconds % 60).toString().padStart(2, '0')}", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); IconButton(onClick = { isRestTimerRunning = false; restTimerSeconds = 0 }) { Icon(Icons.Default.Close, null, tint = Color.White) } } } } }) { padding -> Box(modifier = Modifier.fillMaxSize().background(Color.Black).padding(padding)) { if (GlobalWorkoutManager.exercises.isEmpty()) { Text("Entrenamiento vacío.", color = Color.Gray, modifier = Modifier.align(Alignment.Center)) }; LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) { itemsIndexed(GlobalWorkoutManager.exercises) { index, exercise -> ActiveExerciseItem(exercise = exercise, onDelete = { GlobalWorkoutManager.exercises.removeAt(index) }, onReplace = { indexToReplace = index; showExerciseSelector = true }, onTimerStart = { restTimerSeconds = exercise.restTimeSeconds; isRestTimerRunning = true }); Spacer(modifier = Modifier.height(24.dp)) }; item { Spacer(modifier = Modifier.height(80.dp)) } } }; if (showExerciseSelector) { ExerciseSelectorDialog(onDismiss = { showExerciseSelector = false }, onExerciseSelected = { name -> if (indexToReplace >= 0) { val oldEx = GlobalWorkoutManager.exercises[indexToReplace]; GlobalWorkoutManager.exercises[indexToReplace] = oldEx.copy(name = name) } else { GlobalWorkoutManager.exercises.add(ActiveExercise(System.currentTimeMillis().toString(), name, mutableStateListOf(WorkoutSet(1, "-", "-")))) }; showExerciseSelector = false }) } } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun SummaryScreen(navController: NavController) { var notes by remember { mutableStateOf("") }; val currentDate = remember { SimpleDateFormat("d MMM yyyy, h:mm a", Locale.getDefault()).format(Date()) }; val currentTimestamp = remember { System.currentTimeMillis() }; val durationStr = "${GlobalWorkoutManager.durationSeconds / 60}min"; var totalVolume = 0; var totalSets = 0; GlobalWorkoutManager.exercises.forEach { ex -> ex.sets.forEach { if(it.isCompleted) { totalVolume += (it.weight.toIntOrNull()?:0) * (it.reps.toIntOrNull()?:0); totalSets++ } } }; Scaffold(topBar = { TopAppBar(title = { Text("Guardar", color = Color.White, fontWeight = FontWeight.Bold) }, navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) } }, actions = { Button(onClick = { val completedExercises = GlobalWorkoutManager.exercises.map { it.copy() }; GlobalHistoryManager.history.add(0, WorkoutHistoryItem(routineName = GlobalWorkoutManager.currentRoutineName, date = currentTimestamp, dateString = currentDate, duration = durationStr, volume = totalVolume, totalSets = totalSets, notes = notes, completedExercises = completedExercises)); GlobalWorkoutManager.stopWorkout(); navController.navigate("profile") { popUpTo("home") { inclusive = false } } }, colors = ButtonDefaults.buttonColors(containerColor = InfernoRed)) { Text("Guardar", color = Color.White, fontWeight = FontWeight.Bold) } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }) { padding -> Column(modifier = Modifier.fillMaxSize().background(Color.Black).padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) { Text(GlobalWorkoutManager.currentRoutineName, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.height(24.dp)); Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { StatBox("Duración", durationStr); StatBox("Volumen", "$totalVolume kg"); StatBox("Series", "$totalSets") }; Divider(modifier = Modifier.padding(vertical = 16.dp), color = Color(0xFF222222)); Text("When", color = Color.Gray, fontSize = 12.sp); Text(currentDate, color = InfernoOrange, fontSize = 16.sp); Spacer(modifier = Modifier.height(24.dp)); Box(modifier = Modifier.fillMaxWidth().height(100.dp).border(1.dp, Color.DarkGray, RoundedCornerShape(8.dp)).clickable { }, contentAlignment = Alignment.Center) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.AddPhotoAlternate, null, tint = Color.Gray); Spacer(modifier = Modifier.width(8.dp)); Text("Agregar una foto / video", color = Color.Gray) } }; Spacer(modifier = Modifier.height(24.dp)); Text("Descripción", color = Color.Gray, fontSize = 12.sp); OutlinedTextField(value = notes, onValueChange = { notes = it }, placeholder = { Text("¿Cómo ha ido tu entrenamiento?", color = Color.Gray) }, modifier = Modifier.fillMaxWidth().height(150.dp), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.DarkGray, unfocusedBorderColor = Color.DarkGray, cursorColor = InfernoOrange), textStyle = TextStyle(color = Color.White, fontSize = 16.sp)); Spacer(modifier = Modifier.height(40.dp)); TextButton(onClick = { GlobalWorkoutManager.stopWorkout(); navController.popBackStack() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Descartar Entreno", color = InfernoRed, fontSize = 16.sp) } } } }
+@Composable fun ProfileMenuButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier, onClick: ()->Unit) { Button(onClick = onClick, modifier = modifier.height(60.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E1E))) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = Color.White); Spacer(modifier = Modifier.width(8.dp)); Text(text, color = Color.White) } } }
+@Composable fun ProfileStat(title: String, label: String, value: String) { Column(horizontalAlignment = Alignment.CenterHorizontally) { if(title.isNotEmpty()) Text(title, color = Color.White, fontWeight = FontWeight.Bold); Text(label, color = Color.Gray, fontSize = 12.sp); Text(value, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) } }
+@Composable fun WorkoutHubScreen(navController: NavController) { Column(modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp)) { Text("ENTRENAMIENTO", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.height(16.dp)); Button(onClick = { navController.navigate("active_session/Entrenamiento Libre") }, modifier = Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E1E)), shape = RoundedCornerShape(8.dp)) { Icon(Icons.Default.Add, null, tint = Color.White); Spacer(modifier = Modifier.width(8.dp)); Text("Empezar Entrenamiento Vacío", color = Color.White) }; Spacer(modifier = Modifier.height(24.dp)); Button(onClick = { GlobalRoutineManager.routineToEdit = null; navController.navigate("create_routine") }, modifier = Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E1E)), shape = RoundedCornerShape(8.dp)) { Icon(Icons.Default.Edit, null, tint = InfernoOrange, modifier = Modifier.size(18.dp)); Spacer(modifier = Modifier.width(8.dp)); Text("Nueva Rutina", color = Color.White, fontSize = 14.sp) }; Spacer(modifier = Modifier.height(24.dp)); Text("Mis Rutinas (${GlobalRoutineManager.routines.size})", color = Color.Gray, fontSize = 14.sp); Spacer(modifier = Modifier.height(8.dp)); LazyColumn { items(GlobalRoutineManager.routines) { routine -> RoutineCardItem(routine = routine, navController = navController) } } } }
+@Composable fun RoutineCardItem(routine: Routine, navController: NavController) { var showMenu by remember { mutableStateOf(false) }; Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), border = BorderStroke(1.dp, Color(0xFF333333))) { Column(modifier = Modifier.padding(16.dp)) { Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(routine.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold); Box { IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreHoriz, null, tint = Color.Gray) }; DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Color(0xFF2C2C2C)) { DropdownMenuItem(text = { Text("✏️ Modificar", color = Color.White) }, onClick = { showMenu = false; GlobalRoutineManager.routineToEdit = routine; navController.navigate("create_routine") }); Divider(color = Color.Gray, thickness = 0.5.dp); DropdownMenuItem(text = { Text("🗑️ Borrar", color = InfernoRed) }, onClick = { showMenu = false; GlobalRoutineManager.deleteRoutine(routine) }) } } }; Spacer(modifier = Modifier.height(4.dp)); Text(routine.description, color = Color.Gray, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2); Spacer(modifier = Modifier.height(16.dp)); Button(onClick = { navController.navigate("active_session/${routine.name}") }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = InfernoRed), shape = RoundedCornerShape(6.dp)) { Text("Empezar Rutina", fontWeight = FontWeight.Bold, color = Color.White) } } } }
+@OptIn(ExperimentalMaterial3Api::class) @Composable fun CreateRoutineScreen(navController: NavController) { val editingRoutine = GlobalRoutineManager.routineToEdit; var routineName by remember { mutableStateOf(editingRoutine?.name ?: "") }; val selectedExercises = remember { mutableStateListOf<String>().apply { addAll(editingRoutine?.exerciseNames ?: emptyList()) } }; var showExerciseSelector by remember { mutableStateOf(false) }; val screenTitle = if (editingRoutine != null) "Modificar Rutina" else "Nueva Rutina"; Scaffold(topBar = { TopAppBar(title = { Text(screenTitle, color = Color.White, fontWeight = FontWeight.Bold) }, navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.Close, null, tint = Color.White) } }, actions = { TextButton(onClick = { if (routineName.isNotEmpty() && selectedExercises.isNotEmpty()) { if (editingRoutine != null) { GlobalRoutineManager.updateRoutine(editingRoutine.id, routineName, selectedExercises.toList()) } else { GlobalRoutineManager.addRoutine(routineName, selectedExercises.toList()) }; GlobalRoutineManager.routineToEdit = null; navController.popBackStack() } }) { Text("Guardar", color = if (routineName.isNotEmpty()) InfernoOrange else Color.Gray, fontWeight = FontWeight.Bold) } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)) }, containerColor = Color.Black) { padding -> Column(modifier = Modifier.padding(padding).padding(16.dp).fillMaxSize()) { Text("Nombre", color = Color.Gray, fontSize = 12.sp); OutlinedTextField(value = routineName, onValueChange = { routineName = it }, placeholder = { Text("Ej: Pecho Destructor", color = Color.Gray) }, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, cursorColor = InfernoOrange, focusedBorderColor = InfernoOrange, unfocusedBorderColor = Color.DarkGray), singleLine = true); Spacer(modifier = Modifier.height(24.dp)); Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("Ejercicios (${selectedExercises.size})", color = Color.Gray, fontSize = 14.sp); TextButton(onClick = { showExerciseSelector = true }) { Text("+ Añadir", color = InfernoOrange) } }; LazyColumn { items(selectedExercises) { exercise -> Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), border = BorderStroke(1.dp, Color(0xFF333333))) { Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text(exercise, color = Color.White); IconButton(onClick = { selectedExercises.remove(exercise) }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Close, null, tint = Color.Gray) } } } } } }; if (showExerciseSelector) { ExerciseSelectorDialog(onDismiss = { showExerciseSelector = false }, onExerciseSelected = { name -> selectedExercises.add(name); showExerciseSelector = false }) } } }
+@Composable fun StatBox(label: String, value: String) { Column { Text(label, color = Color.Gray, fontSize = 12.sp); Text(value, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) } }
+@Composable fun ActiveExerciseItem(exercise: ActiveExercise, onDelete: () -> Unit, onReplace: () -> Unit, onTimerStart: () -> Unit) { var showMenu by remember { mutableStateOf(false) }; var showTimeDialog by remember { mutableStateOf(false) }; var tempTime by remember { mutableStateOf(exercise.restTimeSeconds.toString()) }; Column { Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) { Icon(Icons.Default.FitnessCenter, null, tint = InfernoOrange); Spacer(modifier = Modifier.width(8.dp)); Column { Text(exercise.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Descanso: ${exercise.restTimeSeconds}s", color = Color.Gray, fontSize = 12.sp) } }; Box { IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, null, tint = Color.Gray) }; DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Color(0xFF1E1E1E)) { DropdownMenuItem(text = { Text("⏱️ Cambiar Descanso", color = Color.White) }, onClick = { showMenu = false; showTimeDialog = true }); DropdownMenuItem(text = { Text("🔄 Reemplazar Ejercicio", color = Color.White) }, onClick = { showMenu = false; onReplace() }); Divider(color = Color.Gray); DropdownMenuItem(text = { Text("🗑️ Borrar Ejercicio", color = InfernoRed) }, onClick = { showMenu = false; onDelete() }) } } }; Spacer(modifier = Modifier.height(16.dp)); Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) { Text("SET", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(0.8f), textAlign = TextAlign.Center); Text("PREV", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(1.5f), textAlign = TextAlign.Center); Text("KG", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(1.5f), textAlign = TextAlign.Center); Text("REPS", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(1.5f), textAlign = TextAlign.Center); Spacer(modifier = Modifier.width(40.dp)) }; exercise.sets.forEachIndexed { index, set -> var weight by remember { mutableStateOf(set.weight) }; var reps by remember { mutableStateOf(set.reps) }; var completed by remember { mutableStateOf(set.isCompleted) }; Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).background(if(completed) Color(0x33FF5722) else Color.Transparent, RoundedCornerShape(8.dp)), verticalAlignment = Alignment.CenterVertically) { Text("${index + 1}", color = Color.White, modifier = Modifier.weight(0.8f), textAlign = TextAlign.Center); Text("-", color = Color.Gray, modifier = Modifier.weight(1.5f), textAlign = TextAlign.Center); CompactInput(value = weight, onChange = { weight = it; set.weight = it }, modifier = Modifier.weight(1.5f)); CompactInput(value = reps, onChange = { reps = it; set.reps = it }, modifier = Modifier.weight(1.5f)); IconButton(onClick = { if (!completed) onTimerStart(); completed = !completed; set.isCompleted = completed }, modifier = Modifier.size(40.dp)) { Box(modifier = Modifier.size(28.dp).clip(RoundedCornerShape(4.dp)).background(if(completed) InfernoOrange else Color(0xFF424242)), contentAlignment = Alignment.Center) { if(completed) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp)) } } } }; TextButton(onClick = { exercise.sets.add(WorkoutSet(exercise.sets.size + 1, "-", "-")) }) { Text("+ Añadir Serie", color = InfernoOrange) } }; if (showTimeDialog) { AlertDialog(onDismissRequest = { showTimeDialog = false }, containerColor = Color(0xFF1E1E1E), title = { Text("Tiempo de Descanso (s)", color = Color.White) }, text = { OutlinedTextField(value = tempTime, onValueChange = { if(it.all { char -> char.isDigit() }) tempTime = it }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = InfernoOrange)) }, confirmButton = { Button(onClick = { exercise.restTimeSeconds = tempTime.toIntOrNull() ?: 60; showTimeDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = InfernoOrange)) { Text("Guardar") } }) } }
+@Composable fun CompactInput(value: String, onChange: (String) -> Unit, modifier: Modifier) { Box(modifier = modifier.padding(horizontal = 4.dp).height(30.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF2C2C2C)), contentAlignment = Alignment.Center) { BasicTextField(value = value, onValueChange = onChange, textStyle = TextStyle(color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()) } }
+@Composable fun ExerciseSelectorDialog(onDismiss: () -> Unit, onExerciseSelected: (String) -> Unit) { var searchQuery by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, containerColor = Color(0xFF1E1E1E), title = { Text("Seleccionar Ejercicio", color = Color.White) }, text = { Column(modifier = Modifier.height(400.dp)) { OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, placeholder = { Text("Buscar...", color = Color.Gray) }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = InfernoOrange), singleLine = true); LazyColumn { if (searchQuery.isNotEmpty()) { val filtered = InternalExerciseRepo.allExercisesList.filter { it.contains(searchQuery, ignoreCase = true) }; items(filtered) { name -> ExerciseItemRow(name, onExerciseSelected) } } else { InternalExerciseRepo.groupedExercises.forEach { (category, list) -> item { Text(category, color = InfernoOrange, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)) }; items(list) { name -> ExerciseItemRow(name, onExerciseSelected) } } } } } }, confirmButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = Color.Gray) } }) }
+@Composable fun ExerciseItemRow(name: String, onClick: (String) -> Unit) { TextButton(onClick = { onClick(name) }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(vertical = 4.dp)) { Text(name, color = Color.White, fontSize = 16.sp, textAlign = TextAlign.Start, modifier = Modifier.fillMaxWidth()) }; Divider(color = Color(0xFF333333), thickness = 0.5.dp) }
+@Composable fun HomeScreen() { Column(modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text("THE PIT", color = InfernoRed, fontSize = 28.sp, fontWeight = FontWeight.Bold); Spacer(modifier = Modifier.width(8.dp)); Text("FEED", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Light) }; Spacer(modifier = Modifier.height(16.dp)); LazyColumn { items(GlobalFeedManager.posts) { post -> Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), border = BorderStroke(1.dp, Color(0xFF333333))) { Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(modifier = Modifier.size(50.dp).clip(CircleShape).background(if(post.user == GlobalUserManager.name) InfernoRed else Color.Gray), contentAlignment = Alignment.Center) { Text(post.user.first().toString(), color = Color.White, fontWeight = FontWeight.Bold) }; Spacer(modifier = Modifier.width(16.dp)); Column { Text(post.user, color = Color.White, fontWeight = FontWeight.Bold); Row { Text("Completó ", color = Color.Gray, fontSize = 14.sp); Text(post.workoutName, color = InfernoOrange, fontSize = 14.sp, fontWeight = FontWeight.Bold) }; Text("Hace ${post.timeAgo} • 🔥 ${post.likes}", color = Color.Gray, fontSize = 12.sp) } } } } } } }
+@Composable fun BottomNavigationBar(navController: NavController) { val items = listOf(Triple("home", "Home", Icons.Default.Home), Triple("workout_hub", "Entreno", Icons.Default.FitnessCenter), Triple("profile", "Perfil", Icons.Default.Person)); NavigationBar(containerColor = Color(0xFF121212)) { val navBackStackEntry by navController.currentBackStackEntryAsState(); val currentRoute = navBackStackEntry?.destination?.route; items.forEach { (route, label, icon) -> NavigationBarItem(icon = { Icon(icon, contentDescription = label) }, label = { Text(label) }, selected = currentRoute == route, onClick = { navController.navigate(route) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = InfernoOrange, selectedTextColor = InfernoOrange, indicatorColor = Color(0xFF3E2723), unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray)) } } }
+@Composable fun WorkoutMiniPlayer(routineName: String, duration: Long, onResume: () -> Unit, onStop: () -> Unit) { Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)), shape = RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp), modifier = Modifier.fillMaxWidth().height(60.dp).border(BorderStroke(1.dp, InfernoRed))) { Row(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Column { Text("EN PAUSA: $routineName", color = InfernoOrange, fontWeight = FontWeight.Bold, fontSize = 12.sp); val mins = duration / 60; val secs = duration % 60; Text("${mins}m ${secs}s", color = Color.White, fontWeight = FontWeight.Bold) }; Row { TextButton(onClick = onStop) { Text("DETENER", color = Color.Gray, fontSize = 12.sp) }; Spacer(modifier = Modifier.width(8.dp)); Button(onClick = onResume, colors = ButtonDefaults.buttonColors(containerColor = InfernoRed), shape = RoundedCornerShape(50), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp), modifier = Modifier.height(32.dp)) { Text("SEGUIR", fontSize = 12.sp, fontWeight = FontWeight.Bold) } } } } }
